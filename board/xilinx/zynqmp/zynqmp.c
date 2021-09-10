@@ -99,7 +99,7 @@ int board_early_init_f(void)
 # endif
 #endif
 
-static int multi_boot(void)
+static u32 multi_boot_get(void)
 {
 	u32 multiboot = 0;
 	int ret;
@@ -109,6 +109,13 @@ static int multi_boot(void)
 		return -EINVAL;
 
 	return multiboot;
+}
+
+static u32 multi_boot_set(u32 multiboot)
+{
+	zynqmp_mmio_write((u32)&csu_base->multi_boot, 0xFFFFFFFF, multiboot);
+
+	return 0;
 }
 
 #if defined(CONFIG_SPL_BUILD)
@@ -138,8 +145,57 @@ static void print_secure_boot(void)
 	       status & ZYNQMP_CSU_STATUS_ENCRYPTED ? "" : "not ");
 }
 
+#ifndef CONFIG_SPL_BUILD
+static int do_multi_boot(struct cmd_tbl *cmdtp, int flag,
+			 int argc, char * const argv[])
+{
+	int ret;
+	u32 multiboot;
+
+	/* If we just want to retrieve current value */
+	if (argc == 1) {
+		multiboot = multi_boot_get();
+
+		printf("Multiboot: \t%d\n", multiboot);
+
+		if (multiboot > 1)
+			ret = env_set("fiovb.is_secondary_boot", "1");
+		else
+			ret = env_set("fiovb.is_secondary_boot", "0");
+
+		if (ret)
+			return CMD_RET_FAILURE;
+
+		return CMD_RET_SUCCESS;
+	}
+
+	if (strict_strtoul(argv[1], 10, &multiboot) < 0) {
+		printf("Incorrect value of multiboot offset\n");
+		return CMD_RET_USAGE;
+	}
+
+	printf("Set multiboot offset to: \t%d\n", multiboot);
+
+	multi_boot_set(multiboot);
+
+	return CMD_RET_SUCCESS;
+}
+
+U_BOOT_CMD(
+	multi_boot, CONFIG_SYS_MAXARGS, 1, do_multi_boot,
+	"Get/Set CSU multiboot register",
+	"\n"
+	"   no param  - get current offset value\n"
+	"   offset - set offset of the boot image in decimal\n"
+);
+#endif /* CONFIG_SPL_BUILD */
+
+#define PS_SYSMON_ANALOG_BUS_VAL	0x3210
+#define PS_SYSMON_ANALOG_BUS_REG	0xFFA50914
+
 int board_init(void)
 {
+	u32 multiboot;
 #if CONFIG_IS_ENABLED(FPGA) && defined(CONFIG_FPGA_ZYNQMPPL)
 	struct udevice *soc;
 	char name[SOC_MAX_STR_SIZE];
@@ -188,8 +244,11 @@ int board_init(void)
 
 	/* display secure boot information */
 	print_secure_boot();
-	if (current_el() == 3)
-		printf("Multiboot:\t%d\n", multi_boot());
+	if (current_el() == 3) {
+		multiboot = multi_boot_get();
+
+		printf("Multiboot:\t%d\n", multiboot);
+	}
 
 	return 0;
 }
@@ -412,7 +471,8 @@ int board_late_init(void)
 	if (ret)
 		return ret;
 
-	multiboot = multi_boot();
+	multiboot = multi_boot_get();
+
 	if (multiboot >= 0)
 		env_set_hex("multiboot", multiboot);
 
@@ -621,7 +681,7 @@ void set_dfu_alt_info(char *interface, char *devstr)
 
 	memset(buf, 0, sizeof(buf));
 
-	multiboot = multi_boot();
+	multiboot = multi_boot_get();
 	if (multiboot < 0)
 		multiboot = 0;
 
